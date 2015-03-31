@@ -1,0 +1,6 @@
+*~
+*.x
+*.o
+*.mod
+src/unused_files
+git_message

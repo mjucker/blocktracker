@@ -1,0 +1,17 @@
+&block_tracker_nml
+	diff_dist = 0.1,
+	max_dist  = 0.5,
+	crit_val  =-0.5,
+	crit_area = 1.e-3,
+	crit_dist = 4.0,
+	crit_dur  = 2.0
+/
+&blocks_nml
+	nx = 100,
+	ny = 150,
+	nt = 30,
+	start_t = 10,
+	stop_t  = 20,
+	sigma = 0.1,
+	noise_amp = 0.0
+/
