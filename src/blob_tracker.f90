@@ -9,7 +9,7 @@
    real    :: crit_val     = -1.0 !units of data field in the code
    real    :: crit_area    = 1e-2 !units of total domain area, \in [0,1]
    real    :: diff_dist    = 1e-1 !units of total domain size: distinguish between contours
-   real    :: max_dist     = 1.0  !units of total domain size: distinguish open contours
+   real    :: max_dist     = 0.9  !units of total domain size: distinguish open contours
 ! block finding parameters:
    real    :: crit_dist    = 0.5  !units of radius 
    real    :: crit_dur     = 5.0  !units of time
@@ -20,13 +20,13 @@
 !=====================================================================
    integer :: numBlobs, numConts, prev_numBlobs, numCands, numBlocks
    integer :: totBlobs
-   integer,dimension(:),allocatable :: numPts,blockCandDuration
-   real                ,allocatable :: blobArea(:),blobCentr(:,:),contours(:,:,:)
-   real                ,allocatable :: prev_Area(:),prev_Centrs(:,:)
-   real                ,allocatable :: blockCandCentrs(:,:,:),blockCandAreas(:,:)&
-        &,blockCandTime(:,:)
-   real                ,allocatable :: blockAreas(:,:),blockCentrs(:,:,:),blockTimes(:,:)
-   real                             :: prev_time
+   integer :: allPtsN
+   integer,dimension(:)    ,allocatable :: numPts,blockCandDuration
+   real   ,dimension(:)    ,allocatable :: blobArea,prev_Area
+   real   ,dimension(:,:)  ,allocatable :: blobCentr,prev_Centrs,blockCandAreas,blockCandTime,&
+                                           blockAreas,blockTimes,allPts
+   real   ,dimension(:,:,:),allocatable :: contours,blockCandCentrs,blockCentrs
+   real     :: prev_time
    real     :: pi
    parameter ( pi = 3.14159 )
    logical :: vecout_called,blob_called
@@ -57,6 +57,7 @@
         numCands = 0
         if( track_blobs )then
            allocate(numPts(maxnum),blobArea(maxnum),blobCentr(2,maxnum))
+           allocate(allPts(2,maxnum*maxpts))
            allocate(contours(2,maxpts,maxnum)) !(x,y),points per contour,contours
            allocate(prev_Area(maxnum),prev_Centrs(2,maxnum))
            allocate(blockCandCentrs(2,maxdur,maxnum),blockCandDuration(maxnum))
@@ -101,7 +102,7 @@
         integer, dimension(:,:),allocatable :: candidates, picked
         integer :: minind(2),i,j,k,l
         real,dimension(:  ),allocatable :: x,y
-        real    :: normalize(2),area,centroid(2)
+        real    :: normalize(2),area,centroid(2),dist
         logical :: last = .true.
 
         nx = size(data,1)
@@ -116,34 +117,39 @@
         do j=1,ny
            y(j) = (j-1)*dy
         enddo
-        ! find contours of crit_val
+        ! find all points on contour of crit_val
         if(minval(data) < crit_val)then
            call conrec(data,1,nx,1,ny,x,y,1,crit_val)
         else
            return
         endif
+        ! split points into distinct contours
+        call split_contours
         ! find characteristics of contours
         do i=1,numConts
-           call compute_blob(data,contours(1,1:numPts(i),i),contours(2,1:numPts(i),i),area,centroid)
-           if( area > crit_area .and. numBlobs < maxnum)then !we've got a block candidate
-              numBlobs = numBlobs+1
-              blobArea(numBlobs) = area
-              blobCentr(:,numBlobs) = centroid
+           dist = maxval(contours(1,1:numPts(i),i)) - minval(contours(1,1:numPts(i),i))
+           if( dist < max_dist ) then
+              call compute_blob(data,contours(1,1:numPts(i),i),contours(2,1:numPts(i),i),area,centroid)
+              if( area > crit_area .and. numBlobs < maxnum)then !we've got a block candidate
+                 numBlobs = numBlobs+1
+                 blobArea(numBlobs) = area
+                 blobCentr(:,numBlobs) = centroid
+              endif
            endif
         enddo
-        
+
         ! diagnostics
         totBlobs = totBlobs + numBlobs
-        do i=1,numBlobs
+        do i=1,numConts
            do j=1,numPts(i)
               write(16,"(es11.3,',',i3,2(',',es11.3))") time,i,contours(:,j,i)
            enddo
+        enddo
+        do i=1,numBlobs
            write(17,"(es11.3,',',i3,3(',',es11.3))") time,i,blobCentr(:,i),blobArea(i)
         enddo
 
         ! re-initialize after this
-        numConts = 0
-        numPts   = 0
         vecout_called = .false.
         
       end subroutine find_blob_candidates
@@ -251,112 +257,160 @@
            area     = 0.
            return
         endif
-
-        is = max(1 ,floor  (min_x*nx))
-        iss= min(nx,ceiling(max_x*nx))
-        js = max(1 ,floor  (min_y*ny))
-        jss= min(ny,ceiling(max_y*ny))
-
-        lx=iss-is+1
-        ly=jss-js+1
-        allocate(f(lx,ly))
-        !compute normalization constant
-        N=0.
-        do j=js,jss
-           do i=is,iss
-              f(i-is+1,j-js+1) = min(0., data(i,j) - crit_val)
-              N = N + f(i-is+1,j-js+1)
-           enddo
-        enddo
-        !compute centroid (in global coordinates)
-        xc=0.
-        yc=0.
-        do j=js,jss
-           do i=is,iss
-             xc = xc + (i-1)*dx*f(i-is+1,j-js+1)
-             yc = yc + (j-1)*dy*f(i-is+1,j-js+1)
-          enddo
-       enddo
-       xc = xc/N
-       yc = yc/N
+  
+!!$        is = max(1 ,floor  (min_x*nx))
+!!$        iss= min(nx,ceiling(max_x*nx))
+!!$        js = max(1 ,floor  (min_y*ny))
+!!$        jss= min(ny,ceiling(max_y*ny))
+!!$
+!!$        lx=iss-is+1
+!!$        ly=jss-js+1
+!!$        allocate(f(lx,ly))
+!!$        !compute normalization constant
+!!$        N=0.
+!!$        do j=js,jss
+!!$           do i=is,iss
+!!$              f(i-is+1,j-js+1) = data(i,j)! !min(0., data(i,j) - crit_val)
+!!$              N = N + f(i-is+1,j-js+1)
+!!$           enddo
+!!$        enddo
+!!$        !compute centroid (in global coordinates)
+!!$        xc=0.
+!!$        yc=0.
+!!$        do j=js,jss
+!!$           do i=is,iss
+!!$             xc = xc + (i-1)*dx*f(i-is+1,j-js+1)
+!!$             yc = yc + (j-1)*dy*f(i-is+1,j-js+1)
+!!$          enddo
+!!$       enddo
+!!$       xc = xc/N
+!!$       yc = yc/N
+       ! simple method: average values
+       xc = sum(xcont)/max(1,size(xcont))
+       yc = sum(ycont)/max(1,size(ycont))
        centroid(1) = xc
        centroid(2) = yc
        !compute equivalent radius square
-       rsq=0.
-       do j=js,jss
-          do i=is,iss
-             rsq = rsq + ( ((i-1)*dx - xc)**2 + ((j-1)*dy - yc)**2 )*f(i-is+1,j-js+1)
-          enddo
+!!$       rsq=0.
+!!$       do j=js,jss
+!!$          do i=is,iss
+!!$             rsq = rsq + ( ((i-1)*dx - xc)**2 + ((j-1)*dy - yc)**2 )*f(i-is+1,j-js+1)
+!!$          enddo
+!!$       enddo
+!!$       rsq = rsq/N
+       ! simple method: mean of square distances
+       rsq = 0.
+       do i=1,size(xcont)
+          rsq = rsq + sqrt( (xcont(i)-xc)**2 + (ycont(i)-yc)**2 )
        enddo
-       rsq = rsq/N
+       rsq = rsq/max(1,size(xcont))
        !finally, get equivalent area
        area = pi*rsq
 
       end subroutine compute_blob
 
 !######################################################################
-
-!
-!======================================================================
-!
-!     This is a sample vector output routine. For a local environment
-!     either replace the VECOUT call in the main line, or better
-!     replace the contents of this subroutine between the *'s shown.
-!
-!     There is often the requirement to distinguish each contour
-!     line with a different colour or a different line style. This
-!     can be done in many ways using the contour values z for a
-!     particular line segment.
 !
       subroutine vecout(data,x1,y1,x2,y2,z,last)
         implicit none
+        ! legacy input from conrec:
         real,dimension(nx,ny),intent(in) :: data
         real                 ,intent(in) :: x1,y1,x2,y2,z
         logical              ,intent(in) :: last
-        real :: dist,thisarea,area,centroid(2)
-        real :: dists(maxnum)
-!!$     real,parameter :: eps=1.e-16
-        integer :: minxy(1),ind,dummy
-        !
-        if(.not. vecout_called)then !fist time this is called
-           numConts = 1
-           numPts   = 0
-           numPts(1)= 1
-           contours = 2.
-           contours(1,1,1) = 0.5*(x1+x2)
-           contours(2,1,1) = 0.5*(y1+y2)
-           dists = 2.
+        ! what is needed here:
+
+        if ( .not. vecout_called )then
+           allPtsN = 0
+           allPts  = 0.
            vecout_called = .true.
-           return
         endif
-        
-        call compute_dists(x1,y1,contours(:,:,1:numConts),dists(1:numConts))
-       
-        if ( minval(dists(1:numConts)) > diff_dist ) then ! we have a new contour
-           if ( numConts < maxnum ) then
-              numConts = numConts + 1
-              numPts(numConts) = 1
-              contours(1,1,numConts) = 0.5*(x1+x2)
-              contours(2,1,numConts) = 0.5*(y1+y2)
-           else
-              print*,'WARNING: MAXIMUM NUMBER OF CONTOURS REACHED'
-           endif
-        else ! this is part of an existing contour
-           minxy = minloc(dists(1:numConts)) ! the contour with minimum distance
-           ind = minxy(1)
-           if ( numPts(ind) < maxpts ) then
-              numPts(ind) = numPts(ind) + 1
-              contours(1,numPts(ind),ind) = 0.5*(x1+x2)
-              contours(2,numPts(ind),ind) = 0.5*(y1+y2)
-           else
-              print*,'WARNING: MAXIMUMM POINTS PER CONTOUR REACHED'
-           endif
-        endif
-        
+        allPtsN = allPtsN + 1
+        allPts(1,allPtsN) = 0.5*(x1+x2)
+        allPts(2,allPtsN) = 0.5*(y1+y2)
       end subroutine vecout
 
 !######################################################################
+!
+      subroutine split_contours
+        implicit none
+        integer :: p,pp,c,minxy(1)
+        real    :: locDist
+        real    :: dists(maxnum*maxpts)
+        integer :: to_check(maxnum*maxpts)
+        integer :: to_merge(maxnum)
+        logical :: add_point
+        !
+        ! go over point by point, and check if there is a close-by neighbor
+        to_check = 0
+        to_check(1:allPtsN) = 1
+        numPts  = 1
+        numConts= 1
+        p = 1
+        to_check(p) = 0
+        contours(:,numPts(numConts),numConts) = allPts(:,p)
+        do while ( sum(to_check) .ne. 0 )
+           add_point = .false.
+           ! compute distance to all points that have not been added (checked) yet
+           call point_dists(allPts(:,p),allPts,dists)
+           where( to_check(1:allPtsN) .eq. 0 ) dists = 2.
+           ! check minimum distance to all other points
+           locDist = minval(dists)
+           minxy = minloc(dists)
+           pp = minxy(1)
+           ! if minimum distance is smaller than diff_dist, consider same contour
+           if( locDist < diff_dist ) then
+              add_point = .true.
+           ! otherwise, check the other end of the contour
+           else
+              call point_dists(contours(:,1,numConts),allPts,dists)
+              where( to_check(1:allPtsN) .eq. 0 ) dists = 2.
+              locDist = minval(dists)
+              minxy = minloc(dists)
+              pp = minxy(1)
+              if( locDist < diff_dist ) then
+                 add_point = .true.
+              endif
+           ! one could probably add a condition for x-periodicity here
+           endif
+           if( add_point ) then
+              if ( numPts(numConts) < maxpts-1 ) then
+                 numPts(numConts) = numPts(numConts)+1
+                 contours(:,numPts(numConts),numConts) = allPts(:,pp)
+              else
+                 print*,'WARNING: MAXIMUM NUMBER OF POINTS REACHED'
+              endif
+           ! otherwise, create new contour
+           else
+              if ( numConts < maxnum ) then
+                 numConts = numConts + 1
+                 numPts(numConts) = 1
+                 contours(:,1,numConts) = allPts(:,pp)
+              else
+                 print*,'WARNING: MAXIMUM NUMBER OF CONTOURS REACHED'
+              endif
+           endif
+           ! go on with the next point
+           p = pp
+           to_check(p) = 0
+        enddo
+
+      end subroutine split_contours
+
+!######################################################################
       
+      subroutine point_dists(xy,points,dist)
+        implicit none
+        real,dimension(2  )           ,intent(in) :: xy
+        real,dimension(:,:)           ,intent(in) :: points
+        real,dimension(size(points,2)),intent(out):: dist
+        integer p
+
+        do p=1,size(points,2)
+           dist(p) = sqrt( (points(1,p) - xy(1))**2 + (points(2,p) - xy(2))**2 )
+        enddo
+      end subroutine point_dists
+
+!######################################################################
 
       subroutine compute_dists(x,y,pos_vec,dists)
         implicit none
