@@ -14,6 +14,8 @@
    real    :: crit_dist    = 0.5  !units of radius 
    real    :: crit_dur     = 5.0  !units of time
    integer :: maxdur       = 100  !max number of time steps for block life
+   real    :: max_gap      = 2.0  !units of time, max time between blobs
+                                  ! to count as the same blob
 ! generally used parameters:
    integer :: maxnum       = 100  ! max number of contours and blobs per time step
    integer :: maxpts       = 5000  !max number of points per contour and blob
@@ -159,7 +161,7 @@
       subroutine find_block_candidates(time)
         implicit none
         real,intent(in) :: time
-        real    :: radius,prev_locs(2,1,maxnum),dists(maxnum)
+        real    :: radius,prev_locs(2,1,maxnum),dists(maxnum),gap
         integer :: i,j,jnd(1)
         logical :: foundMatch
         
@@ -168,9 +170,13 @@
            radius = sqrt(blobArea(i)/pi)
            ! check current blobs against last position of block candidates
            if ( numCands > 0 ) then
+              dists = 2.0
               do j=1,numCands
-                 dists(j) = sqrt( ( blobCentr(1,i) - blockCandCentrs(1,blockCandDuration(j),j) )**2&
-                      & + ( blobCentr(2,i) - blockCandCentrs(2,blockCandDuration(j),j) )**2 )
+                 gap  = time - blockCandTime(blockCandDuration(j),j)
+                 if( gap <= max_gap )then
+                    dists(j) = sqrt( ( blobCentr(1,i) - blockCandCentrs(1,blockCandDuration(j),j) )**2&
+                         & + ( blobCentr(2,i) - blockCandCentrs(2,blockCandDuration(j),j) )**2 )
+                 endif
               enddo
               ! now find the closest candidate
               jnd = minloc(dists(1:numCands))
